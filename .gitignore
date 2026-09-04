@@ -1,0 +1,37 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node (test tooling only)
+node_modules/
+package-lock.json
+package.json
+
+# ---------------------------------------------------------------------------
+# Secrets -- never commit these.
+# .env holds Stripe API keys (including the secret key). A secret key in a
+# public repo is compromised the moment it is pushed.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# Personal data -- never commit these.
+# portfolio.json holds real holdings, quantities and purchase prices.
+# subscription.json holds the local plan state.
+# ---------------------------------------------------------------------------
+data/
+*.tmp
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WealthTrack</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◈</span>
+    <div>
+      <h1>WealthTrack</h1>
+      <p class="brand-sub">Live portfolio tracking &middot; Yahoo Finance</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <div class="refresh-state">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">Loading…</span>
+    </div>
+    <a href="#premium" id="plan-badge" class="plan-badge" title="View plans">Free</a>
+    <button id="refresh-btn" class="btn btn-ghost" type="button">
+      <span class="btn-icon">↻</span> Refresh
+    </button>
+  </div>
+</header>
+
+<main>
+
+  <!-- global message banners -->
+  <div id="banners" class="banners" aria-live="polite"></div>
+
+  <!-- summary tiles -->
+  <section class="tiles" aria-label="Portfolio summary">
+    <div class="tile">
+      <span class="tile-label">Total invested</span>
+      <span class="tile-value" id="t-invested">—</span>
+      <span class="tile-sub" id="t-invested-sub">&nbsp;</span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Current value</span>
+      <span class="tile-value" id="t-value">—</span>
+      <span class="tile-sub" id="t-value-sub">&nbsp;</span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Profit / loss</span>
+      <span class="tile-value" id="t-pl">—</span>
+      <span class="tile-sub" id="t-pl-sub">&nbsp;</span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Total return</span>
+      <span class="tile-value" id="t-return">—</span>
+      <span class="tile-sub" id="t-return-sub">&nbsp;</span>
+    </div>
+  </section>
+
+  <!-- charts -->
+  <section class="charts">
+    <div class="card chart-card">
+      <div class="card-head">
+        <h2>Portfolio value</h2>
+        <div class="period-picker" id="period-picker" role="group" aria-label="History period">
+          <button type="button" data-period="1mo" class="active">1M</button>
+          <button type="button" data-period="3mo">3M</button>
+          <button type="button" data-period="6mo">6M</button>
+          <button type="button" data-period="1y">1Y</button>
+          <button type="button" data-period="5y" data-premium="true">5Y</button>
+          <button type="button" data-period="10y" data-premium="true">10Y</button>
+        </div>
+      </div>
+      <div id="history-chart" class="chart-slot">
+        <p class="chart-empty">Add a holding to see your portfolio history.</p>
+      </div>
+    </div>
+
+    <div class="card chart-card">
+      <div class="card-head"><h2>Allocation</h2></div>
+      <div id="allocation-chart" class="chart-slot">
+        <p class="chart-empty">Add a holding to see your allocation.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- premium insights: locked teasers on free, real data on Pro -->
+  <section class="insights" id="premium-insights" aria-label="Portfolio insights">
+    <div class="card insight-card" id="insight-dividends"></div>
+    <div class="card insight-card" id="insight-sectors"></div>
+    <div class="card insight-card" id="insight-benchmark"></div>
+  </section>
+
+  <!-- add holding -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Add a holding</h2>
+    </div>
+    <form id="add-form" class="add-form" autocomplete="off">
+      <div class="field">
+        <label for="f-symbol">Symbol</label>
+        <input id="f-symbol" name="symbol" type="text" placeholder="AAPL" required
+               maxlength="20" spellcheck="false" autocapitalize="characters">
+        <small class="field-hint" id="symbol-hint">&nbsp;</small>
+      </div>
+      <div class="field">
+        <label for="f-quantity">Quantity</label>
+        <input id="f-quantity" name="quantity" type="number" step="any" min="0.000001"
+               placeholder="10" required>
+      </div>
+      <div class="field">
+        <label for="f-price">Purchase price</label>
+        <input id="f-price" name="purchase_price" type="number" step="any" min="0.000001"
+               placeholder="185.50" required>
+      </div>
+      <div class="field">
+        <label for="f-date">Purchase date <span class="optional">optional</span></label>
+        <input id="f-date" name="purchase_date" type="date">
+      </div>
+      <div class="field field-action">
+        <button type="submit" class="btn btn-primary" id="add-btn">Add holding</button>
+      </div>
+    </form>
+    <p id="form-error" class="form-error" hidden></p>
+  </section>
+
+  <!-- holdings -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Holdings</h2>
+      <span class="muted" id="holdings-count"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table class="holdings" id="holdings-table">
+        <thead>
+          <tr>
+            <th scope="col">Symbol</th>
+            <th scope="col" class="num">Qty</th>
+            <th scope="col" class="num">Buy price</th>
+            <th scope="col" class="num">Invested</th>
+            <th scope="col" class="num">Price now</th>
+            <th scope="col" class="num">Value now</th>
+            <th scope="col" class="num">P / L</th>
+            <th scope="col" class="num">Return</th>
+            <th scope="col" class="col-actions"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody id="holdings-body"></tbody>
+      </table>
+    </div>
+
+    <p id="empty-state" class="empty-state">
+      No holdings yet. Add your first stock above to start tracking.
+    </p>
+  </section>
+
+  <!-- ============================ PRICING ============================ -->
+  <section class="pricing" id="premium">
+    <div class="pricing-head">
+      <span class="pricing-eyebrow">WealthTrack Pro</span>
+      <h2 class="pricing-title">Stop guessing whether your portfolio is actually working.</h2>
+      <p class="pricing-sub">
+        The free plan tells you what your stocks are worth. Pro tells you what they
+        earn you, how exposed you are, and whether you would have been better off
+        just buying the index.
+      </p>
+    </div>
+
+    <div class="feature-grid" id="premium-feature-grid"></div>
+
+    <div class="billing-toggle" id="billing-toggle" role="group" aria-label="Billing period">
+      <button type="button" data-billing="monthly">Monthly</button>
+      <button type="button" data-billing="annual" class="active">
+        Annual <span class="save-pill">Save 25%</span>
+      </button>
+    </div>
+
+    <div class="plan-grid" id="plan-grid"></div>
+
+    <div class="card compare-card">
+      <div class="card-head"><h2>Compare plans</h2></div>
+      <div class="table-wrap">
+        <table class="compare" id="compare-table"></table>
+      </div>
+    </div>
+
+    <p class="pricing-note" id="pricing-note"></p>
+  </section>
+
+  <footer class="footer">
+    <p>
+      Prices from Yahoo Finance via <code>yfinance</code>. No API key, no simulated data —
+      if a price cannot be fetched, WealthTrack says so rather than guessing.
+    </p>
+    <p class="footer-meta" id="footer-meta"></p>
+  </footer>
+
+</main>
+
+<!-- edit dialog -->
+<dialog id="edit-dialog" class="dialog">
+  <form id="edit-form" method="dialog">
+    <h2 id="edit-title">Edit holding</h2>
+    <input type="hidden" id="e-id">
+    <div class="field">
+      <label for="e-quantity">Quantity</label>
+      <input id="e-quantity" type="number" step="any" min="0.000001" required>
+    </div>
+    <div class="field">
+      <label for="e-price">Purchase price</label>
+      <input id="e-price" type="number" step="any" min="0.000001" required>
+    </div>
+    <div class="field">
+      <label for="e-date">Purchase date <span class="optional">optional</span></label>
+      <input id="e-date" type="date">
+    </div>
+    <p id="edit-error" class="form-error" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" id="edit-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="edit-save">Save changes</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- upgrade dialog -->
+<dialog id="upgrade-dialog" class="dialog upgrade-dialog">
+  <div class="upgrade-head">
+    <span class="upgrade-mark">◈</span>
+    <div>
+      <h2 id="upgrade-title">Upgrade to Pro</h2>
+      <p class="upgrade-price" id="upgrade-price"></p>
+    </div>
+  </div>
+
+  <ul class="upgrade-list" id="upgrade-list"></ul>
+
+  <div class="upgrade-actions">
+    <button type="button" class="btn btn-primary btn-block" id="upgrade-trial"></button>
+    <button type="button" class="btn btn-ghost btn-block" id="upgrade-checkout">
+      Continue to payment
+    </button>
+    <button type="button" class="btn btn-plain btn-block" id="upgrade-cancel">Not now</button>
+  </div>
+
+  <p class="upgrade-note" id="upgrade-note"></p>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
