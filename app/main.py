@@ -14,11 +14,11 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, analytics, calculations, config, market, premium
+from . import __version__, analytics, calculations, config, db, market, premium
 from .errors import InvalidSymbolError, WealthTrackError
 from .models import HoldingCreate, HoldingUpdate, PlanActivate
-from .storage import PortfolioStore
-from .premium import SubscriptionStore
+from .storage import PortfolioStore, create_portfolio_store
+from .premium import SubscriptionStore, create_subscription_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("wealthtrack")
@@ -37,10 +37,16 @@ app = FastAPI(
     description="Portfolio tracker backed by real Yahoo Finance data (no API key required).",
 )
 
-store = PortfolioStore()
-subscription = SubscriptionStore()
+store = create_portfolio_store()
+subscription = create_subscription_store()
 
-if config.IS_EPHEMERAL:
+
+def _storage_is_ephemeral() -> bool:
+    """True when data written now will not survive a restart."""
+    return not getattr(store, "is_durable", False)
+
+
+if _storage_is_ephemeral():
     log.warning("Ephemeral storage in use (%s). %s",
                 config.DATA_DIR_SOURCE, config.EPHEMERAL_WARNING)
 
@@ -59,12 +65,26 @@ def health() -> dict:
         "status": "ok",
         "version": __version__,
         "server_time": datetime.now(timezone.utc).isoformat(),
-        "data_file": str(store.path),
-        "storage": {
-            **config.storage_info(),
-            "in_memory_only": store.in_memory_only,
-        },
+        "data_file": str(store.path) if store.path else None,
+        "storage": _storage_status(),
     }
+
+
+def _storage_status() -> dict:
+    backend = getattr(store, "backend", "file")
+    status: dict = {
+        "backend": backend,
+        "durable": getattr(store, "is_durable", False),
+        "in_memory_only": getattr(store, "in_memory_only", False),
+    }
+    if backend == "postgres":
+        # Report on the connection this store actually uses, not a new one.
+        database = getattr(store, "db", None) or db.get_db()
+        status["database"] = database.healthcheck()
+        status["configured_from"] = db.configured_from()
+    else:
+        status.update(config.storage_info())
+    return status
 
 
 # -------------------------------------------------------------- holdings --
@@ -129,11 +149,13 @@ def _build_portfolio(force_refresh: bool = False) -> dict:
     portfolio["price_errors"] = errors
     portfolio["as_of"] = datetime.now(timezone.utc).isoformat()
     portfolio["source"] = "Yahoo Finance (yfinance)"
+    ephemeral = _storage_is_ephemeral()
     portfolio["storage"] = {
-        "ephemeral": config.IS_EPHEMERAL or store.in_memory_only,
+        "ephemeral": ephemeral,
+        "backend": getattr(store, "backend", "file"),
     }
     # Never let someone believe a holding was saved when it was not.
-    if config.IS_EPHEMERAL or store.in_memory_only:
+    if ephemeral:
         portfolio["warnings"].append(config.EPHEMERAL_WARNING)
 
     # Self-check the arithmetic on every response.

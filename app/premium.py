@@ -198,6 +198,47 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def derive_state(data: dict) -> dict:
+    """Turn a stored subscription record into the plan state the app uses.
+
+    Shared by the file and PostgreSQL backends so entitlement is decided in
+    exactly one place regardless of where the record came from.
+    """
+    plan_id = data.get("plan", "free")
+    trial_ends = data.get("trial_ends_at")
+    expired = False
+
+    if trial_ends:
+        try:
+            expired = datetime.fromisoformat(trial_ends) <= _utcnow()
+        except (ValueError, TypeError):
+            expired = False
+
+    active = plan_id in PRO_PLAN_IDS and not expired
+    effective = plan_id if active else "free"
+
+    days_left = None
+    if trial_ends and not expired:
+        try:
+            days_left = max(0, (datetime.fromisoformat(trial_ends) - _utcnow()).days)
+        except (ValueError, TypeError):
+            days_left = None
+
+    return {
+        "plan": effective,
+        "plan_name": PLANS.get(effective, PLANS["free"])["name"],
+        "is_premium": active,
+        "is_trial": bool(trial_ends) and active,
+        "trial_ends_at": trial_ends if active else None,
+        "trial_days_left": days_left,
+        "trial_expired": expired,
+        "since": data.get("since"),
+        "refresh_seconds": PRO_REFRESH_SECONDS if active else FREE_REFRESH_SECONDS,
+        "max_holdings": None if active else FREE_MAX_HOLDINGS,
+        "max_history_period": None if active else FREE_MAX_HISTORY_PERIOD,
+    }
+
+
 class SubscriptionStore:
     """Local subscription state. One user, one machine, one JSON file."""
 
@@ -216,6 +257,8 @@ class SubscriptionStore:
                 "in-memory state for this process.", self.path, exc,
             )
             self._memory = {"plan": "free", "since": _utcnow().isoformat()}
+
+    backend = "file"
 
     @property
     def in_memory_only(self) -> bool:
@@ -245,41 +288,7 @@ class SubscriptionStore:
     def state(self) -> dict:
         with self._lock:
             data = self._read()
-
-        plan_id = data.get("plan", "free")
-        trial_ends = data.get("trial_ends_at")
-        expired = False
-
-        if trial_ends:
-            try:
-                expired = datetime.fromisoformat(trial_ends) <= _utcnow()
-            except ValueError:
-                expired = False
-
-        active = plan_id in PRO_PLAN_IDS and not expired
-        effective = plan_id if active else "free"
-
-        days_left = None
-        if trial_ends and not expired:
-            try:
-                days_left = max(
-                    0, (datetime.fromisoformat(trial_ends) - _utcnow()).days)
-            except ValueError:
-                days_left = None
-
-        return {
-            "plan": effective,
-            "plan_name": PLANS.get(effective, PLANS["free"])["name"],
-            "is_premium": active,
-            "is_trial": bool(trial_ends) and active,
-            "trial_ends_at": trial_ends if active else None,
-            "trial_days_left": days_left,
-            "trial_expired": expired,
-            "since": data.get("since"),
-            "refresh_seconds": PRO_REFRESH_SECONDS if active else FREE_REFRESH_SECONDS,
-            "max_holdings": None if active else FREE_MAX_HOLDINGS,
-            "max_history_period": None if active else FREE_MAX_HISTORY_PERIOD,
-        }
+        return derive_state(data)
 
     def is_premium(self) -> bool:
         return self.state()["is_premium"]
@@ -345,6 +354,17 @@ def check_history_period(store: SubscriptionStore, period: str) -> None:
             feature="history",
             details={"requested": period, "max_free": FREE_MAX_HISTORY_PERIOD},
         )
+
+
+def create_subscription_store():
+    """PostgreSQL when configured, otherwise the local file store."""
+    from . import db
+
+    if db.is_configured():
+        from .pg_storage import PostgresSubscriptionStore
+
+        return PostgresSubscriptionStore()
+    return SubscriptionStore()
 
 
 def pricing_payload(store: SubscriptionStore) -> dict:

@@ -100,32 +100,94 @@ Source: Yahoo Finance (yfinance) · Totals self-check: passed · Last refresh �
 
 ---
 
-## Deploying (Vercel)
+## Storage
 
-`vercel.json` routes every request to the FastAPI app and bundles `static/`
-alongside it. Deploy from the repo root; Vercel installs `requirements.txt`.
+Two interchangeable backends, chosen automatically:
 
-### Read the storage caveat first
+| Condition | Backend | Durable |
+|---|---|---|
+| A database URL is in the environment | **PostgreSQL** | Yes |
+| No database URL | Local JSON file | Only if the disk is writable |
 
-**On Vercel, your holdings will not persist.** Serverless functions get a
-read-only filesystem with only `/tmp` writable, and `/tmp` is wiped when the
-instance is recycled and is not shared between concurrent instances. WealthTrack
-detects this, keeps working, and shows a warning banner rather than letting you
-believe a holding was saved.
+The app reads the first URL it finds, in this order — the first four are what
+Vercel Postgres / Neon inject automatically:
 
-That is fine for a demo. For anything real, give it durable storage:
+```
+WEALTHTRACK_DATABASE_URL   your own override, wins over everything
+POSTGRES_URL               Vercel/Neon pooled -- the right one for serverless
+DATABASE_URL
+POSTGRES_URL_NON_POOLING
+POSTGRES_PRISMA_URL
+```
 
-| Option | How |
-|---|---|
-| **Any host with a disk** (Railway, Fly.io, Render, a VPS, Docker) | Works as-is; set `WEALTHTRACK_DATA_DIR` to a mounted volume |
-| **Vercel + a database** | Replace the JSON reads/writes in `storage.py` with Vercel KV / Postgres. The store is a small, self-contained class precisely so this is a localised change |
+Provider URLs are normalised on the way in: `pgbouncer=true` and other
+Prisma-only params are stripped (libpq rejects them), and `sslmode=require` is
+added for any remote host while local connections are left alone.
 
-Set `WEALTHTRACK_DATA_DIR` to point storage anywhere writable. When it is unset,
-the app probes: project `data/` if writable, otherwise a temp directory, which it
-flags as ephemeral. `GET /api/health` reports exactly what it chose:
+**The file backend is the local-development fallback.** It is deliberately not
+used as a silent fallback when a database *is* configured but unreachable —
+quietly writing to a temp file on a serverless host looks like it worked and
+then loses the data. In that case the error surfaces instead.
+
+`GET /api/health` reports exactly what is live:
 
 ```json
-"storage": { "data_dir": "...", "ephemeral": true, "resolved_from": "temp directory (read-only filesystem)" }
+"storage": { "backend": "postgres", "durable": true,
+             "database": { "connected": true, "holdings": 5,
+                           "url": "postgresql://***@ep-x.neon.tech/neondb" } }
+```
+
+### Schema
+
+`migrations/001_init.sql` — idempotent, and also applied by the app on first
+use so a fresh deployment self-provisions.
+
+```
+holdings(id, symbol, name, quantity, purchase_price, purchase_date, notes,
+         created_at, updated_at)
+subscription(id, plan, since, trial_ends_at, source, updated_at)   -- single row
+schema_migrations(version, applied_at)
+```
+
+Money is `NUMERIC`, never float: `quantity NUMERIC(24,8)` for fractional shares
+and `purchase_price NUMERIC(20,4)` to match the app's price precision. A float
+column would reintroduce exactly the drift the calculation layer works to avoid.
+`CHECK (quantity > 0)` and `CHECK (purchase_price > 0)` enforce the same rules
+the API does, so even a direct `INSERT` cannot store nonsense.
+
+```powershell
+python scripts\migrate.py                              # create / verify schema
+python scripts\migrate.py --status                     # what is applied
+python scripts\migrate.py --import-json data\portfolio.json   # migrate existing data
+```
+
+The import is idempotent — re-running skips holdings already present.
+
+### Deploying to Vercel
+
+`vercel.json` routes every request to the FastAPI app and bundles `static/`.
+
+1. In the Vercel dashboard: **Storage → Create Database → Postgres**, and
+   attach it to this project. *(This is the one manual step — `vercel storage`
+   was removed from the CLI, and `vercel integration add` needs an interactive
+   plan choice.)*
+2. `vercel env pull` to get the connection variables into `.env` locally.
+3. Redeploy. The app creates its schema on first request.
+
+Nothing else is needed: attaching the database sets `POSTGRES_URL`, the app
+picks it up, and the file backend stops being used.
+
+### Local development
+
+Runs with **no database at all** — leave the URL variables unset and it uses
+`data/portfolio.json`. Set `WEALTHTRACK_DATA_DIR` to move that elsewhere.
+
+To develop against a real Postgres instead:
+
+```powershell
+$env:WEALTHTRACK_DATABASE_URL = "postgresql://postgres:pw@127.0.0.1:5433/wealthtrack"
+python scripts\migrate.py
+.\run.ps1
 ```
 
 ### Bundle size
@@ -224,6 +286,15 @@ so the marketing copy cannot drift from what is actually enforced.
 | `test_market_live.py` | Real calls to Yahoo Finance (marked `live`) |
 | `test_premium.py` | Plan gating, holding limit, trial expiry, dividend/sector maths, checkout honesty |
 | `test_readonly_deploy.py` | Read-only filesystem: path probing, in-memory fallback, app imports, no 500s |
+| `test_postgres_storage.py` | URL parsing/redaction, and the CRUD suite run against **both** backends with identical assertions |
+
+The Postgres tests skip automatically unless `WEALTHTRACK_TEST_DATABASE_URL`
+is set. Run them with:
+
+```powershell
+$env:WEALTHTRACK_TEST_DATABASE_URL = "postgresql://postgres:pw@127.0.0.1:5433/wealthtrack"
+.\.venv\Scripts\python.exe -m pytest tests\test_postgres_storage.py
+```
 
 There is also an end-to-end acceptance check that builds a real portfolio
 through the HTTP API and verifies every figure **twice** — against an

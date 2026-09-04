@@ -2,7 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel, Field, field_validator
+
+
+def _validate_iso_date(v: str | None) -> str | None:
+    """Accept YYYY-MM-DD or nothing.
+
+    Validated here rather than in a store so both the file and PostgreSQL
+    backends reject the same input -- Postgres would refuse a bad date at the
+    column, and the file backend would happily save the garbage.
+    """
+    if v is None or v == "":
+        return None
+    try:
+        return date.fromisoformat(str(v)[:10]).isoformat()
+    except ValueError:
+        raise ValueError(f"'{v}' is not a valid date. Use YYYY-MM-DD.") from None
 
 
 class HoldingCreate(BaseModel):
@@ -19,6 +36,11 @@ class HoldingCreate(BaseModel):
         if not cleaned:
             raise ValueError("Symbol is required.")
         return cleaned
+
+    @field_validator("purchase_date")
+    @classmethod
+    def _check_date(cls, v: str | None) -> str | None:
+        return _validate_iso_date(v)
 
 
 class PlanActivate(BaseModel):
@@ -43,3 +65,8 @@ class HoldingUpdate(BaseModel):
     @classmethod
     def _clean_symbol(cls, v: str | None) -> str | None:
         return v.strip().upper() if v else v
+
+    @field_validator("purchase_date")
+    @classmethod
+    def _check_date(cls, v: str | None) -> str | None:
+        return _validate_iso_date(v)

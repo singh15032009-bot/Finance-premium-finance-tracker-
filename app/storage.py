@@ -91,9 +91,17 @@ class PortfolioStore:
             )
             self._memory = {"holdings": [], "created_at": _utcnow_iso()}
 
+    backend = "file"
+
     @property
     def in_memory_only(self) -> bool:
         return self._memory is not None
+
+    @property
+    def is_durable(self) -> bool:
+        """False when data will not survive a restart."""
+        from .config import IS_EPHEMERAL
+        return not self._memory and not IS_EPHEMERAL
 
     # ---------------------------------------------------------------- io --
 
@@ -230,3 +238,26 @@ class PortfolioStore:
         for h in self.list_holdings():
             totals[h["symbol"]] = totals.get(h["symbol"], 0.0) + float(h["quantity"])
         return totals
+
+
+# --------------------------------------------------------------- factory --
+
+
+def create_portfolio_store():
+    """PostgreSQL when a database URL is configured, otherwise the local file.
+
+    The file store is the local-development fallback. It is deliberately NOT
+    used as a silent fallback when a database *is* configured but unreachable:
+    quietly writing to a temp file on a serverless host would look like it
+    worked and then lose the data. In that case the error surfaces instead.
+    """
+    from . import db
+
+    if db.is_configured():
+        from .pg_storage import PostgresPortfolioStore
+
+        log.info("Portfolio storage: PostgreSQL (%s)", db.redact(db.get_database_url() or ""))
+        return PostgresPortfolioStore()
+
+    log.info("Portfolio storage: local file at %s", DEFAULT_PATH)
+    return PortfolioStore()

@@ -4,3 +4,7 @@
 # For local development and tests, use requirements-dev.txt instead.
 fastapi>=0.110
 yfinance>=0.2.40
+
+# PostgreSQL. The [binary] extra ships prebuilt wheels so no libpq or compiler
+# is needed in the build image; [pool] provides the connection pool.
+psycopg[binary,pool]>=3.1
