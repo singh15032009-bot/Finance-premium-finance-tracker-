@@ -26,9 +26,12 @@ run. To use a different port: `.\run.ps1 -Port 9000`.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
 ```
+
+`requirements.txt` is production-only (FastAPI + yfinance);
+`requirements-dev.txt` adds uvicorn, pytest and httpx.
 </details>
 
 ---
@@ -94,6 +97,42 @@ dashboard footer says so. The footer on a healthy portfolio reads:
 ```
 Source: Yahoo Finance (yfinance) · Totals self-check: passed · Last refresh …
 ```
+
+---
+
+## Deploying (Vercel)
+
+`vercel.json` routes every request to the FastAPI app and bundles `static/`
+alongside it. Deploy from the repo root; Vercel installs `requirements.txt`.
+
+### Read the storage caveat first
+
+**On Vercel, your holdings will not persist.** Serverless functions get a
+read-only filesystem with only `/tmp` writable, and `/tmp` is wiped when the
+instance is recycled and is not shared between concurrent instances. WealthTrack
+detects this, keeps working, and shows a warning banner rather than letting you
+believe a holding was saved.
+
+That is fine for a demo. For anything real, give it durable storage:
+
+| Option | How |
+|---|---|
+| **Any host with a disk** (Railway, Fly.io, Render, a VPS, Docker) | Works as-is; set `WEALTHTRACK_DATA_DIR` to a mounted volume |
+| **Vercel + a database** | Replace the JSON reads/writes in `storage.py` with Vercel KV / Postgres. The store is a small, self-contained class precisely so this is a localised change |
+
+Set `WEALTHTRACK_DATA_DIR` to point storage anywhere writable. When it is unset,
+the app probes: project `data/` if writable, otherwise a temp directory, which it
+flags as ephemeral. `GET /api/health` reports exactly what it chose:
+
+```json
+"storage": { "data_dir": "...", "ephemeral": true, "resolved_from": "temp directory (read-only filesystem)" }
+```
+
+### Bundle size
+
+`yfinance` pulls in pandas and numpy, which is most of Vercel's 250 MB limit.
+`requirements.txt` is therefore production-only; dev tools live in
+`requirements-dev.txt`. If the bundle is rejected, that split is where to look.
 
 ---
 
@@ -184,6 +223,7 @@ so the marketing copy cannot drift from what is actually enforced.
 | `test_market_errors.py` | Network failures, unknown tickers, bad prices, the stale-cache fallback and its limits |
 | `test_market_live.py` | Real calls to Yahoo Finance (marked `live`) |
 | `test_premium.py` | Plan gating, holding limit, trial expiry, dividend/sector maths, checkout honesty |
+| `test_readonly_deploy.py` | Read-only filesystem: path probing, in-memory fallback, app imports, no 500s |
 
 There is also an end-to-end acceptance check that builds a real portfolio
 through the HTTP API and verifies every figure **twice** — against an

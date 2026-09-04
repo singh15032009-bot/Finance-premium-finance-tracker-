@@ -1,5 +1,6 @@
+# Production / deployment dependencies only.
+# Kept minimal because yfinance already pulls in pandas and numpy, and
+# serverless bundles have a hard size limit.
+# For local development and tests, use requirements-dev.txt instead.
 fastapi>=0.110
-uvicorn[standard]>=0.27
 yfinance>=0.2.40
-pytest>=8.0
-httpx>=0.27

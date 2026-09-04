@@ -9,6 +9,7 @@ temp file, then replace) so a crash mid-save cannot leave a truncated file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -17,9 +18,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+log = logging.getLogger("wealthtrack.storage")
+
+from .config import PORTFOLIO_PATH
 from .errors import HoldingNotFoundError, StorageError, ValidationError
 
-DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "portfolio.json"
+DEFAULT_PATH = PORTFOLIO_PATH
 
 # os.replace can fail on Windows with WinError 32 when a virus scanner or the
 # search indexer momentarily opens the temp file we just wrote. The lock clears
@@ -71,13 +75,31 @@ class PortfolioStore:
     def __init__(self, path: Path | str = DEFAULT_PATH):
         self.path = Path(path)
         self._lock = threading.RLock()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._write({"holdings": [], "created_at": _utcnow_iso()})
+        # Populated only if the disk turns out to be unusable, so the app can
+        # still serve requests instead of failing to import.
+        self._memory: dict | None = None
+
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if not self.path.exists():
+                self._write({"holdings": [], "created_at": _utcnow_iso()})
+        except (OSError, StorageError) as exc:
+            log.warning(
+                "Portfolio storage at %s is not writable (%s); falling back to "
+                "in-memory storage for this process. Data will not persist.",
+                self.path, exc,
+            )
+            self._memory = {"holdings": [], "created_at": _utcnow_iso()}
+
+    @property
+    def in_memory_only(self) -> bool:
+        return self._memory is not None
 
     # ---------------------------------------------------------------- io --
 
     def _read(self) -> dict:
+        if self._memory is not None:
+            return self._memory
         try:
             with self.path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -92,6 +114,9 @@ class PortfolioStore:
         return data
 
     def _write(self, data: dict) -> None:
+        if self._memory is not None:
+            self._memory = data
+            return
         atomic_write_json(self.path, data, what="portfolio")
 
     # ------------------------------------------------------------ helpers --

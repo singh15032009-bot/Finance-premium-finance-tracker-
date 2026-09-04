@@ -10,11 +10,11 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, analytics, calculations, market, premium
+from . import __version__, analytics, calculations, config, market, premium
 from .errors import InvalidSymbolError, WealthTrackError
 from .models import HoldingCreate, HoldingUpdate, PlanActivate
 from .storage import PortfolioStore
@@ -23,8 +23,13 @@ from .premium import SubscriptionStore
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("wealthtrack")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-STATIC_DIR = BASE_DIR / "static"
+BASE_DIR = config.BASE_DIR
+STATIC_DIR = config.STATIC_DIR
+
+# Point yfinance's timezone cache somewhere writable before the first Yahoo
+# call. On serverless hosts $HOME is read-only and this otherwise blows up on
+# the first request rather than at startup.
+config.configure_yfinance_cache()
 
 app = FastAPI(
     title="WealthTrack",
@@ -34,6 +39,10 @@ app = FastAPI(
 
 store = PortfolioStore()
 subscription = SubscriptionStore()
+
+if config.IS_EPHEMERAL:
+    log.warning("Ephemeral storage in use (%s). %s",
+                config.DATA_DIR_SOURCE, config.EPHEMERAL_WARNING)
 
 
 @app.exception_handler(WealthTrackError)
@@ -51,6 +60,10 @@ def health() -> dict:
         "version": __version__,
         "server_time": datetime.now(timezone.utc).isoformat(),
         "data_file": str(store.path),
+        "storage": {
+            **config.storage_info(),
+            "in_memory_only": store.in_memory_only,
+        },
     }
 
 
@@ -116,6 +129,12 @@ def _build_portfolio(force_refresh: bool = False) -> dict:
     portfolio["price_errors"] = errors
     portfolio["as_of"] = datetime.now(timezone.utc).isoformat()
     portfolio["source"] = "Yahoo Finance (yfinance)"
+    portfolio["storage"] = {
+        "ephemeral": config.IS_EPHEMERAL or store.in_memory_only,
+    }
+    # Never let someone believe a holding was saved when it was not.
+    if config.IS_EPHEMERAL or store.in_memory_only:
+        portfolio["warnings"].append(config.EPHEMERAL_WARNING)
 
     # Self-check the arithmetic on every response.
     problems = calculations.verify_totals(portfolio)
@@ -268,9 +287,34 @@ def validate(symbol: str) -> dict:
 
 # ------------------------------------------------------------------- ui --
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# Mounting a missing directory raises at import time, which would take the
+# whole app down over a packaging mistake. Degrade to an API-only service and
+# say so instead.
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+else:  # pragma: no cover - deployment packaging problem
+    log.error("Static directory missing at %s; serving API only.", STATIC_DIR)
 
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    index_file = STATIC_DIR / "index.html"
+    if not index_file.is_file():
+        return JSONResponse(status_code=500, content={
+            "error": {
+                "code": "static_missing",
+                "message": "The dashboard files were not deployed with the app.",
+                "details": {"expected_at": str(index_file)},
+            }})
+    return FileResponse(str(index_file))
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.png", include_in_schema=False)
+def favicon():
+    """Browsers request these unprompted; answer without a 500 in the logs."""
+    for name in ("favicon.ico", "favicon.png"):
+        candidate = STATIC_DIR / name
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+    return Response(status_code=204)

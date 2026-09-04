@@ -13,14 +13,18 @@ See ``CHECKOUT_NOTE`` and the README for what connecting Stripe would involve.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .errors import PremiumRequiredError
+from .config import SUBSCRIPTION_PATH
+from .errors import PremiumRequiredError, StorageError
 from .storage import atomic_write_json
 
-DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "subscription.json"
+log = logging.getLogger("wealthtrack.premium")
+
+DEFAULT_PATH = SUBSCRIPTION_PATH
 
 # --- free-plan limits ------------------------------------------------------
 FREE_MAX_HOLDINGS = 10
@@ -200,11 +204,26 @@ class SubscriptionStore:
     def __init__(self, path: Path | str = DEFAULT_PATH):
         self.path = Path(path)
         self._lock = threading.RLock()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._write({"plan": "free", "since": _utcnow().isoformat()})
+        self._memory: dict | None = None
+
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if not self.path.exists():
+                self._write({"plan": "free", "since": _utcnow().isoformat()})
+        except (OSError, StorageError) as exc:
+            log.warning(
+                "Subscription storage at %s is not writable (%s); using "
+                "in-memory state for this process.", self.path, exc,
+            )
+            self._memory = {"plan": "free", "since": _utcnow().isoformat()}
+
+    @property
+    def in_memory_only(self) -> bool:
+        return self._memory is not None
 
     def _read(self) -> dict:
+        if self._memory is not None:
+            return self._memory
         try:
             with self.path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -216,6 +235,9 @@ class SubscriptionStore:
         return data if isinstance(data, dict) else {"plan": "free"}
 
     def _write(self, data: dict) -> None:
+        if self._memory is not None:
+            self._memory = data
+            return
         atomic_write_json(self.path, data, what="subscription")
 
     # ------------------------------------------------------------- state --

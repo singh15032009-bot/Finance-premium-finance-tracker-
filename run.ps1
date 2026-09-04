@@ -11,7 +11,7 @@ if (-not (Test-Path $python)) {
     Write-Host "No virtual environment found. Creating one..." -ForegroundColor Yellow
     python -m venv (Join-Path $PSScriptRoot ".venv")
     & $python -m pip install --upgrade pip
-    & $python -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
+    & $python -m pip install -r (Join-Path $PSScriptRoot "requirements-dev.txt")
 }
 
 Write-Host "WealthTrack running at http://127.0.0.1:$Port  (Ctrl+C to stop)" -ForegroundColor Green

@@ -1,0 +1,6 @@
+# Local development and testing.
+-r requirements.txt
+
+uvicorn[standard]>=0.27
+pytest>=8.0
+httpx>=0.27
